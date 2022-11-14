@@ -35,7 +35,11 @@ namespace skia {
 
 // This constant approximates the scaling done in the software path's
 // "high quality" mode, in SkBlurMask::Blur() (1 / sqrt(3)).
+<<<<<<< HEAD
 static const float BLUR_SIGMA_SCALE = 0.19245f;
+=======
+static const float BLUR_SIGMA_SCALE = 0.02405625f;
+>>>>>>> 7647d1ceaad1664704f8b9fe891282b4b362aa9f
 
 GaussianBlurFilter::GaussianBlurFilter(): BlurFilter(/* maxCrossFadeRadius= */ 0.0f) {}
 

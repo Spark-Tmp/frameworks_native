@@ -39,10 +39,16 @@ cc_defaults {
         "-Wshadow-field-in-constructor-modified",
         "-Wshadow-uncaptured-local",
         "-O3",
+<<<<<<< HEAD
         "-g0"
+=======
+>>>>>>> 7647d1ceaad1664704f8b9fe891282b4b362aa9f
     ],
     sanitize: {
         misc_undefined: ["bounds"],
+    },
+    lto: {
+        thin: true,
     },
     tidy: true,
     tidy_checks: [

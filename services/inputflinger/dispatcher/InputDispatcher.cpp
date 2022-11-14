@@ -776,7 +776,7 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t* nextWakeupTime) {
 
         // Poke user activity for this event.
         if (mPendingEvent->policyFlags & POLICY_FLAG_PASS_TO_USER) {
-            pokeUserActivityLocked(*mPendingEvent);
+            pokeUserActivityLocked(mPendingEvent.get());
         }
     }
 
@@ -847,13 +847,14 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t* nextWakeupTime) {
 
         case EventEntry::Type::KEY: {
             std::shared_ptr<KeyEntry> keyEntry = std::static_pointer_cast<KeyEntry>(mPendingEvent);
-            if (isAppSwitchDue) {
-                if (isAppSwitchKeyEvent(*keyEntry)) {
+            if (isAppSwitchKeyEvent(*keyEntry)) {
+                if (mAppSwitchDueTime != LONG_LONG_MAX &&
+                    keyEntry->action == AKEY_EVENT_ACTION_UP) {
                     resetPendingAppSwitchLocked(true);
                     isAppSwitchDue = false;
-                } else if (dropReason == DropReason::NOT_DROPPED) {
-                    dropReason = DropReason::APP_SWITCH;
                 }
+            } else if (isAppSwitchDue && dropReason == DropReason::NOT_DROPPED) {
+                dropReason = DropReason::APP_SWITCH;
             }
             if (dropReason == DropReason::NOT_DROPPED && isStaleEvent(currentTime, *keyEntry)) {
                 dropReason = DropReason::STALE;
@@ -1770,7 +1771,7 @@ void InputDispatcher::dispatchEventLocked(nsecs_t currentTime,
 
     ALOG_ASSERT(eventEntry->dispatchInProgress); // should already have been set to true
 
-    pokeUserActivityLocked(*eventEntry);
+    pokeUserActivityLocked(eventEntry.get());
 
     for (const InputTarget& inputTarget : inputTargets) {
         sp<Connection> connection =
@@ -2839,12 +2840,12 @@ std::string InputDispatcher::getApplicationWindowLabel(
     }
 }
 
-void InputDispatcher::pokeUserActivityLocked(const EventEntry& eventEntry) {
-    if (!isUserActivityEvent(eventEntry)) {
+void InputDispatcher::pokeUserActivityLocked(const EventEntry* eventEntry) {
+    if (!isUserActivityEvent(*eventEntry)) {
         // Not poking user activity if the event type does not represent a user activity
         return;
     }
-    int32_t displayId = getTargetDisplayId(eventEntry);
+    int32_t displayId = getTargetDisplayId(*eventEntry);
     sp<WindowInfoHandle> focusedWindowHandle = getFocusedWindowHandleLocked(displayId);
     if (focusedWindowHandle != nullptr) {
         const WindowInfo* info = focusedWindowHandle->getInfo();
@@ -2857,37 +2858,39 @@ void InputDispatcher::pokeUserActivityLocked(const EventEntry& eventEntry) {
     }
 
     int32_t eventType = USER_ACTIVITY_EVENT_OTHER;
-    switch (eventEntry.type) {
+    int32_t keyCode = AKEYCODE_UNKNOWN;
+    switch (eventEntry->type) {
         case EventEntry::Type::MOTION: {
-            const MotionEntry& motionEntry = static_cast<const MotionEntry&>(eventEntry);
-            if (motionEntry.action == AMOTION_EVENT_ACTION_CANCEL) {
+            const MotionEntry* motionEntry = static_cast<const MotionEntry*>(eventEntry);
+            if (motionEntry->action == AMOTION_EVENT_ACTION_CANCEL) {
                 return;
             }
 
-            if (MotionEvent::isTouchEvent(motionEntry.source, motionEntry.action)) {
+            if (MotionEvent::isTouchEvent(motionEntry->source, motionEntry->action)) {
                 eventType = USER_ACTIVITY_EVENT_TOUCH;
             }
             break;
         }
         case EventEntry::Type::KEY: {
-            const KeyEntry& keyEntry = static_cast<const KeyEntry&>(eventEntry);
-            if (keyEntry.flags & AKEY_EVENT_FLAG_CANCELED) {
+            const KeyEntry* keyEntry = static_cast<const KeyEntry*>(eventEntry);
+            if (keyEntry->flags & AKEY_EVENT_FLAG_CANCELED) {
                 return;
             }
             eventType = USER_ACTIVITY_EVENT_BUTTON;
+            keyCode = keyEntry->keyCode;
             break;
         }
         default: {
             LOG_ALWAYS_FATAL("%s events are not user activity",
-                             ftl::enum_string(eventEntry.type).c_str());
+                             ftl::enum_string(eventEntry->type).c_str());
             break;
         }
     }
 
-    auto command = [this, eventTime = eventEntry.eventTime, eventType, displayId]()
+    auto command = [this, eventTime = eventEntry->eventTime, eventType, displayId, keyCode]()
                            REQUIRES(mLock) {
                                scoped_unlock unlock(mLock);
-                               mPolicy->pokeUserActivity(eventTime, eventType, displayId);
+                               mPolicy->pokeUserActivity(eventTime, eventType, displayId, keyCode);
                            };
     postCommandLocked(std::move(command));
 }
@@ -3648,6 +3651,8 @@ void InputDispatcher::synthesizeCancelationEventsForConnectionLocked(
     target.inputChannel = connection->inputChannel;
     target.flags = InputTarget::FLAG_DISPATCH_AS_IS;
 
+    const bool wasEmpty = connection->outboundQueue.empty();
+
     for (size_t i = 0; i < cancelationEvents.size(); i++) {
         std::unique_ptr<EventEntry> cancelationEventEntry = std::move(cancelationEvents[i]);
         switch (cancelationEventEntry->type) {
@@ -3682,7 +3687,10 @@ void InputDispatcher::synthesizeCancelationEventsForConnectionLocked(
                                    InputTarget::FLAG_DISPATCH_AS_IS);
     }
 
-    startDispatchCycleLocked(currentTime, connection);
+    // If the outbound queue was previously empty, start the dispatch cycle going.
+    if (wasEmpty && !connection->outboundQueue.empty()) {
+        startDispatchCycleLocked(currentTime, connection);
+    }
 }
 
 void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
@@ -3716,6 +3724,8 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
     target.inputChannel = connection->inputChannel;
     target.flags = InputTarget::FLAG_DISPATCH_AS_IS;
 
+    const bool wasEmpty = connection->outboundQueue.empty();
+
     for (std::unique_ptr<EventEntry>& downEventEntry : downEvents) {
         switch (downEventEntry->type) {
             case EventEntry::Type::MOTION: {
@@ -3741,8 +3751,10 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
         enqueueDispatchEntryLocked(connection, std::move(downEventEntry), target,
                                    InputTarget::FLAG_DISPATCH_AS_IS);
     }
-
-    startDispatchCycleLocked(currentTime, connection);
+    // If the outbound queue was previously empty, start the dispatch cycle going.
+    if (wasEmpty && !connection->outboundQueue.empty()) {
+        startDispatchCycleLocked(currentTime, connection);
+    }
 }
 
 std::unique_ptr<MotionEntry> InputDispatcher::splitMotionEvent(
@@ -4720,10 +4732,13 @@ void InputDispatcher::setInputWindowsLocked(
     updateWindowHandlesForDisplayLocked(windowInfoHandles, displayId);
 
     const std::vector<sp<WindowInfoHandle>>& windowHandles = getWindowHandlesLocked(displayId);
-    if (mLastHoverWindowHandle &&
-        std::find(windowHandles.begin(), windowHandles.end(), mLastHoverWindowHandle) ==
-                windowHandles.end()) {
-        mLastHoverWindowHandle = nullptr;
+    if (mLastHoverWindowHandle) {
+        const WindowInfo* lastHoverWindowInfo = mLastHoverWindowHandle->getInfo();
+        if (lastHoverWindowInfo && lastHoverWindowInfo->displayId == displayId &&
+            std::find(windowHandles.begin(), windowHandles.end(), mLastHoverWindowHandle) ==
+                    windowHandles.end()) {
+            mLastHoverWindowHandle = nullptr;
+        }
     }
 
     std::optional<FocusResolver::FocusChanges> changes =

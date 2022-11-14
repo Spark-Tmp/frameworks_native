@@ -924,6 +924,12 @@ EGLContext eglCreateContextImpl(EGLDisplay dpy, EGLConfig config, EGLContext sha
         if (context != EGL_NO_CONTEXT) {
             // figure out if it's a GLESv1 or GLESv2
             int version = egl_connection_t::GLESv1_INDEX;
+
+#ifdef NV_ANDROID_FRAMEWORK_ENHANCEMENTS
+            if (cnx->egl.eglQueryAPI() == EGL_OPENGL_API)
+                version = egl_connection_t::GLESv2_INDEX;
+#endif
+
             if (attrib_list) {
                 while (*attrib_list != EGL_NONE) {
                     GLint attr = *attrib_list++;
@@ -1150,6 +1156,10 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddressImpl(const char* procn
     addr = findBuiltinWrapper(procname);
     if (addr) return addr;
 
+#ifdef NV_ANDROID_FRAMEWORK_ENHANCEMENTS
+    if (gEGLImpl.dso && gEGLImpl.egl.eglGetProcAddress)
+        addr = gEGLImpl.egl.eglGetProcAddress(procname);
+#else
     // this protects accesses to sGLExtensionMap, sGLExtensionSlot, and sGLExtensionSlotMap
     pthread_mutex_lock(&sExtensionMapMutex);
 
@@ -1234,6 +1244,7 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddressImpl(const char* procn
     }
 
     pthread_mutex_unlock(&sExtensionMapMutex);
+#endif
     return addr;
 }
 
@@ -1453,7 +1464,11 @@ EGLBoolean eglSurfaceAttribImpl(EGLDisplay dpy, EGLSurface surface, EGLint attri
             setError(EGL_BAD_SURFACE, EGL_FALSE);
         }
         int err = native_window_set_auto_refresh(s->getNativeWindow(), value != 0);
-        return (err == 0) ? EGL_TRUE : setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+        if (err != 0) {
+            return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+        } else if (!s->cnx->useAngle) {
+            return EGL_TRUE;
+        } // else if ANGLE, fall through to the call to the driver (i.e. ANGLE) below
     }
 
     if (attribute == EGL_TIMESTAMPS_ANDROID) {
@@ -1463,7 +1478,11 @@ EGLBoolean eglSurfaceAttribImpl(EGLDisplay dpy, EGLSurface surface, EGLint attri
             return EGL_TRUE;
         }
         int err = native_window_enable_frame_timestamps(s->getNativeWindow(), value != 0);
-        return (err == 0) ? EGL_TRUE : setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+        if (err != 0) {
+            return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+        } else if (!s->cnx->useAngle) {
+            return EGL_TRUE;
+        } // else if ANGLE, fall through to the call to the driver (i.e. ANGLE) below
     }
 
     if (s->setSmpte2086Attribute(attribute, value)) {

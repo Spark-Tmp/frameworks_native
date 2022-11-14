@@ -19,7 +19,10 @@ cc_defaults {
         "-Wunreachable-code",
         "-Wconversion",
         "-O3",
+<<<<<<< HEAD
         "-g0"
+=======
+>>>>>>> 7647d1ceaad1664704f8b9fe891282b4b362aa9f
     ],
 }
 
@@ -28,6 +31,7 @@ cc_defaults {
     defaults: [
         "surfaceflinger_defaults",
         "skia_renderengine_deps",
+        "surfaceflinger_qcom_ext_defaults",
     ],
     cflags: [
         "-DLOG_TAG=\"SurfaceFlinger\"",
