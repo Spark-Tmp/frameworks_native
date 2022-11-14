@@ -161,6 +161,7 @@ cc_library {
     },
 
     cflags: [
+    	"-O3",
         "-Wall",
         "-Wextra",
         "-Wextra-semi",
